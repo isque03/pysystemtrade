@@ -9,6 +9,13 @@ from syscore.fileutils import (
 )
 from pathlib import Path
 
+try:
+    import pyarrow
+    ARROW_INVALID = pyarrow.lib.ArrowInvalid
+except (ImportError, AttributeError):
+    # Fallback if pyarrow is not available or doesn't have ArrowInvalid
+    ARROW_INVALID = Exception
+
 EXTENSION = "parquet"
 
 
@@ -26,7 +33,8 @@ class ParquetAccess(object):
         filename = self._get_filename_given_data_type_and_identifier(
             data_type=data_type, identifier=identifier
         )
-        return os.path.isfile(filename)
+        # Check that file exists AND has size > 0 (0-byte files are not valid parquet files)
+        return os.path.isfile(filename) and os.path.getsize(filename) > 0
 
     def delete_data_given_data_type_and_identifier(
         self, data_type: str, identifier: str
@@ -55,7 +63,21 @@ class ParquetAccess(object):
         filename = self._get_filename_given_data_type_and_identifier(
             data_type=data_type, identifier=identifier
         )
-        return pd.read_parquet(filename)
+        try:
+            return pd.read_parquet(filename)
+        except ARROW_INVALID as e:
+            # Handle 0-byte or corrupted parquet files
+            # PyArrow raises ArrowInvalid for 0-byte files
+            error_msg = str(e).lower()
+            if "0 bytes" in error_msg or "parquet file size is 0" in error_msg:
+                raise missingFile(
+                    f"Parquet file '{filename}' is 0 bytes (empty/corrupted)"
+                ) from e
+            # Re-raise other ArrowInvalid exceptions as-is (might be other corruption issues)
+            raise
+        except Exception as e:
+            # Re-raise other exceptions as-is
+            raise
 
     def _get_filename_given_data_type_and_identifier(
         self, data_type: str, identifier: str

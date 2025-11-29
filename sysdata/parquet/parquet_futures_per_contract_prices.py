@@ -1,5 +1,6 @@
 from typing import Tuple
 from syscore.dateutils import Frequency, MIXED_FREQ
+from syscore.exceptions import missingData, missingFile
 
 from sysdata.parquet.parquet_access import ParquetAccess
 from sysdata.futures.futures_per_contract_prices import (
@@ -54,9 +55,16 @@ class parquetFuturesContractPriceData(futuresContractPriceData):
         )
 
         # Returns a data frame which should have the right format
-        data = self.parquet.read_data_given_data_type_and_identifier(
-            data_type=CONTRACT_COLLECTION, identifier=ident
-        )
+        try:
+            data = self.parquet.read_data_given_data_type_and_identifier(
+                data_type=CONTRACT_COLLECTION, identifier=ident
+            )
+        except missingFile:
+            # Convert missingFile (e.g., from 0-byte or corrupted parquet files) to missingData
+            # to maintain API consistency
+            raise missingData(
+                f"No valid price data found for {futures_contract_object.key} at {frequency}"
+            )
 
         return futuresContractPrices(data)
 
