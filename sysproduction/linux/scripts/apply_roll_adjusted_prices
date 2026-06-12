@@ -1,0 +1,7 @@
+#!/bin/bash
+# Apply Panama backadjustment + forward extension for stuck instruments.
+# Calls roll_adjusted_and_multiple_prices() directly for each instrument.
+
+. ~/.profile
+
+python3 "$SCRIPT_PATH/apply_roll_adjusted_prices.py"

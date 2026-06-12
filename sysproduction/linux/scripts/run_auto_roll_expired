@@ -1,0 +1,3 @@
+#!/bin/bash
+. ~/.profile
+python3 "$SCRIPT_PATH/run_auto_roll_expired.py"
