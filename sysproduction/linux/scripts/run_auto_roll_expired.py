@@ -38,6 +38,13 @@ from sysobjects.production.roll_state import roll_adj_state, default_state
 STALE_DAYS_THRESHOLD = 5
 ROLL_ISSUES_COLLECTION = "auto_roll_issues"
 
+# Instruments permanently excluded from auto-roll (discontinued or not traded).
+# Add instrument codes here to suppress retries and issue tracking.
+EXCLUDED_INSTRUMENTS = {
+    "EDOLLAR",     # discontinued (replaced by SOFR/SR3 in 2023)
+    "US2Y_micro",  # not traded — insufficient volume
+}
+
 
 class RollIssueStore:
     """
@@ -258,6 +265,8 @@ def run_auto_roll_expired():
 
         failed = {}
         for instrument_code in sorted(all_instruments):
+            if instrument_code in EXCLUDED_INSTRUMENTS:
+                continue
             force_retry = instrument_code in pending
             result = roll_instrument(data, instrument_code, store, force=force_retry)
             if result is failure:
