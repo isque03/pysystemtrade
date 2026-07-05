@@ -35,7 +35,7 @@ from sysproduction.update_historical_prices import (
 from sysobjects.contracts import futuresContract
 from sysobjects.production.roll_state import roll_adj_state, default_state
 
-STALE_DAYS_THRESHOLD = 5
+STALE_DAYS_THRESHOLD = 1
 ROLL_ISSUES_COLLECTION = "auto_roll_issues"
 
 # Instruments permanently excluded from auto-roll (discontinued or not traded).
@@ -193,13 +193,38 @@ def roll_instrument(data, instrument_code, store, force=False):
     if pd.isna(last_row.get('FORWARD_CONTRACT')):
         forward_contract = ''
 
-    # Staleness check (skip if not stale and not a forced retry)
-    real_mask = (mult['PRICE_CONTRACT'].astype(str) == price_contract) & mult['PRICE'].notna()
-    if not real_mask.any():
-        data.log.warning(f"{instrument_code}: no real PRICE found for {price_contract}, skipping")
-        return failure
+    # Staleness check (skip if not stale and not a forced retry).
+    #
+    # IMPORTANT: this must check the RAW per-contract price feed, not the
+    # merged multiple_prices column. multiple_prices is only rebuilt once a
+    # day by run_daily_update_multiple_adjusted_prices, which runs AFTER this
+    # job in the cron schedule — so its tail is structurally always close to
+    # a day behind, even when the underlying contract is trading completely
+    # normally. Checking that lagging column caused false "stale" positives
+    # (e.g. GBP_micro/AUD_micro force-rolled away from September on 2026-07-01
+    # while September was still trading with normal volume through 2026-07-02)
+    # that had nothing to do with real contract liquidity or expiry.
+    last_real_date = None
+    try:
+        contract_obj = futuresContract(instrument_code, price_contract)
+        raw_prices = diag.get_merged_prices_for_contract_object(contract_obj).return_final_prices()
+        if len(raw_prices) > 0:
+            last_real_date = raw_prices.index[-1].date()
+    except Exception as e:
+        data.log.warning(
+            f"{instrument_code}: could not read raw contract prices for {price_contract} "
+            f"({e}) — falling back to multiple_prices check"
+        )
 
-    last_real_date = mult[real_mask].index[-1].date()
+    if last_real_date is None:
+        # Fall back to the old (lagging) check only if the raw per-contract
+        # feed itself is unavailable.
+        real_mask = (mult['PRICE_CONTRACT'].astype(str) == price_contract) & mult['PRICE'].notna()
+        if not real_mask.any():
+            data.log.warning(f"{instrument_code}: no real PRICE found for {price_contract}, skipping")
+            return failure
+        last_real_date = mult[real_mask].index[-1].date()
+
     days_stale = (datetime.date.today() - last_real_date).days
 
     if not force and days_stale <= STALE_DAYS_THRESHOLD:
