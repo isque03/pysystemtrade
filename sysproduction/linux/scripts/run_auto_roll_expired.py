@@ -35,7 +35,7 @@ from sysproduction.update_historical_prices import (
 from sysobjects.contracts import futuresContract
 from sysobjects.production.roll_state import roll_adj_state, default_state
 
-STALE_DAYS_THRESHOLD = 1
+STALE_DAYS_THRESHOLD = 5
 ROLL_ISSUES_COLLECTION = "auto_roll_issues"
 
 # Instruments permanently excluded from auto-roll (discontinued or not traded).
@@ -112,6 +112,18 @@ class RollIssueStore:
 
     def all_issues(self):
         return list(self._col.find({}, {"_id": 0}))
+
+
+def _last_real_price_date(diag, instrument_code, contract_date_str):
+    """Last date with real (non-empty) raw per-contract price data, or None."""
+    try:
+        contract_obj = futuresContract(instrument_code, contract_date_str)
+        raw_prices = diag.get_merged_prices_for_contract_object(contract_obj).return_final_prices()
+        if len(raw_prices) > 0:
+            return raw_prices.index[-1].date()
+    except Exception:
+        pass
+    return None
 
 
 def _attempt_roll(data, instrument_code):
@@ -204,16 +216,11 @@ def roll_instrument(data, instrument_code, store, force=False):
     # (e.g. GBP_micro/AUD_micro force-rolled away from September on 2026-07-01
     # while September was still trading with normal volume through 2026-07-02)
     # that had nothing to do with real contract liquidity or expiry.
-    last_real_date = None
-    try:
-        contract_obj = futuresContract(instrument_code, price_contract)
-        raw_prices = diag.get_merged_prices_for_contract_object(contract_obj).return_final_prices()
-        if len(raw_prices) > 0:
-            last_real_date = raw_prices.index[-1].date()
-    except Exception as e:
+    last_real_date = _last_real_price_date(diag, instrument_code, price_contract)
+    if last_real_date is None:
         data.log.warning(
             f"{instrument_code}: could not read raw contract prices for {price_contract} "
-            f"({e}) — falling back to multiple_prices check"
+            f"— falling back to multiple_prices check"
         )
 
     if last_real_date is None:
@@ -267,6 +274,42 @@ def roll_instrument(data, instrument_code, store, force=False):
             update_positions.set_roll_state(instrument_code, default_state)
             store.record_failure(instrument_code, price_contract, forward_contract, err)
             return failure
+
+    # Liquidity gate on the roll TARGET before finalizing.
+    #
+    # Without this, a roll can mechanically "succeed" (pysystemtrade can compute
+    # a valid backadjustment splice) purely from a thin historical overlap, even
+    # though the resulting priced contract has no real going-forward liquidity.
+    # That contract then immediately looks stale again next run, triggering
+    # another roll — a runaway ratchet that marched GOLD through 11 contracts
+    # in 5 weeks (Oct'26 -> Jun'28) before landing on a contract IB had no
+    # price data for at all. Refusing to finalize into an illiquid target
+    # breaks the cascade: the roll fails and surfaces in auto_roll_issues for
+    # manual review instead of silently advancing further.
+    try:
+        new_priced_contract = str(rolling_obj.updated_multiple_prices.iloc[-1]['PRICE_CONTRACT'])
+    except Exception:
+        new_priced_contract = forward_contract
+
+    new_last_real_date = _last_real_price_date(diag, instrument_code, new_priced_contract)
+    new_days_stale = (
+        None if new_last_real_date is None
+        else (datetime.date.today() - new_last_real_date).days
+    )
+
+    if new_last_real_date is None or new_days_stale > STALE_DAYS_THRESHOLD:
+        data.log.critical(
+            f"{instrument_code}: refusing to finalize roll into {new_priced_contract} — "
+            f"target contract has "
+            f"{'no' if new_last_real_date is None else f'{new_days_stale}d-stale'} "
+            f"real price data. Manual intervention required."
+        )
+        update_positions.set_roll_state(instrument_code, default_state)
+        store.record_failure(
+            instrument_code, price_contract, new_priced_contract,
+            "roll target has no recent/liquid price data",
+        )
+        return failure
 
     rolling_obj.write_new_rolled_data()
     update_positions.set_roll_state(instrument_code, default_state)
