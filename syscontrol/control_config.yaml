@@ -1,6 +1,7 @@
 process_configuration_start_time:
   default: '00:01'
   run_stack_handler: '00:01'
+  run_additional_sampling: '00:01'
   run_capital_update: '01:00'
   run_daily_prices_updates: '20:00'
   run_daily_fx_and_contract_updates: '07:00'
@@ -14,6 +15,7 @@ process_configuration_stop_time:
   default: '23:50'
   run_strategy_order_generator: '23:50'
   run_stack_handler: '19:45'
+  run_additional_sampling: '19:45'
   run_capital_update: '19:50'
   run_daily_prices_updates: '23:50'
   run_daily_fx_and_contract_updates: '23:50'
@@ -82,6 +84,10 @@ process_configuration_methods:
       max_executions: -1
     safe_stack_removal:
       run_on_completion_only: True
+  run_additional_sampling:
+    refresh_additional_sampling_all_instruments:
+      frequency: 60
+      max_executions: -1
   run_reports:
     costs_report:
       max_executions: 1
