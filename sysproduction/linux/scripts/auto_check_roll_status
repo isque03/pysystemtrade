@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# Wrapper script to run the automated roll status checker.
+# Mirrors the production script so that JOB_COMMAND=auto_check_roll_status
+# works correctly inside the job container entrypoint.
+
+# Load user profile (for SCRIPT_PATH, PYTHONPATH, etc.)
+. ~/.profile
+
+# Delegate to the Python driver that automates interactive_update_roll_status
+python3 "$SCRIPT_PATH/auto_check_roll_status.py"
+
