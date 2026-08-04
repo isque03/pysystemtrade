@@ -1,7 +1,6 @@
 from collections import namedtuple
 from copy import copy
 
-import numpy as np
 import pandas as pd
 
 from syscore.exceptions import missingData
@@ -468,9 +467,14 @@ def _valid_dates_from_paired_prices(paired_prices: pd.DataFrame, avoid_date):
 
 
 def _matching_prices_from_paired_prices(paired_prices):
-    paired_prices_check_match = paired_prices.apply(
-        lambda xlist: not any(np.isnan(xlist)), axis=1
-    )
+    # Columns can end up as object dtype when a contract has zero rows (an
+    # empty Series defaults to dtype object rather than float64), which
+    # breaks np.isnan with a TypeError. Coerce to numeric first (turning any
+    # non-numeric contamination into NaN, same as a missing price - not
+    # silently "valid"), then use notna(), which handles NaN/None/object
+    # dtypes uniformly without raising.
+    paired_prices_numeric = paired_prices.apply(pd.to_numeric, errors="coerce")
+    paired_prices_check_match = paired_prices_numeric.notna().all(axis=1)
     paired_prices_matching = paired_prices_check_match[paired_prices_check_match]
 
     return paired_prices_matching
